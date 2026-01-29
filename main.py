@@ -2,10 +2,13 @@ import cv2
 import mediapipe as mp  
 import time
 import subprocess
+import sys
+import threading
 from pathlib import Path
 
 
 def osascript(script: str) -> None:
+    # macOS only
     subprocess.run(
         ["osascript", "-e", script],
         stdout=subprocess.DEVNULL,
@@ -13,41 +16,108 @@ def osascript(script: str) -> None:
         check=False,
     )
 
-def play_video(video_path: Path) -> None:
-    absolute_path = str(video_path)
-    script = f'''
-    tell application "QuickTime Player"
-        activate
-        set doc to open POSIX file "{absolute_path}"
-        
-        tell doc
-            play
-            set presenting to false
-            tell front window
-                set bounds to {25, 45, 415, 825}
+class VideoPlayer:
+    def __init__(self):
+        self.process = None
+        self.is_macos = sys.platform == "darwin"
+
+    def play_video(self, video_path: Path) -> None:
+        # Play video based on platform
+        if self.is_macos:
+            self._play_video_macos(video_path)
+        else:
+            self._play_video_windows(video_path)
+
+    def close_video(self, video_path: Path) -> None:
+        # Close video based on platform
+        if self.is_macos:
+            self._close_video_macos(video_path)
+        else:
+            self._close_video_windows()
+
+
+
+    def _play_video_windows(self, video_path: Path) -> None:
+        # Play video with opencv on windows
+        if self.process is not None:
+            return
+
+        video_name = video_path.name
+
+        def play_in_thread():
+            cap = cv2.VideoCapture(str(video_path))
+            if not cap.isOpened():
+                return
+
+            window_name = 'Video'
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(window_name, 390, 780)
+            cv2.moveWindow(window_name, 25, 45)
+
+            fps =  30
+            delay = int(1000 / fps)
+
+            while cap.isOpened() and self.process is not None:
+                ret, frame = cap.read()
+                if not ret:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    continue
+
+                cv2.imshow(window_name, frame)
+                if cv2.waitKey(delay) & 0xFF == 27:
+                    break
+
+            cap.release()
+            cv2.destroyWindow(window_name)
+
+
+        self.process = threading.Thread(target=play_in_thread, daemon=True)
+        self.process.start()
+
+
+    def _close_video_windows(self) -> None:
+        if self.process is not None:
+            self.process = None
+            try:
+                cv2.destroyAllWindows()
+            except:
+                pass
+
+    def _play_video_macos(self, video_path: Path) -> None:
+        absolute_path = str(video_path)
+        script = f'''
+        tell application "QuickTime Player"
+            activate
+            set doc to open POSIX file "{absolute_path}"
+            
+            tell doc
+                play
+                set presenting to false
+                tell front window
+                    set bounds to {25, 45, 415, 825}
+                end tell
+    
             end tell
-
         end tell
-    end tell
-    '''
-    osascript(script)
+        '''
+        osascript(script)
 
 
-def close_video(video_path: Path) -> None:
-    video_name = video_path.name
-    script = f'''
-    tell application "QuickTime Player"
-        repeat with d in documents
-            try
-                if (name of d) is "{video_name}" then
-                    stop d
-                    close d saving no
-                end if
-            end try
-        end repeat
-    end tell
-    '''
-    osascript(script)
+    def _close_video_macos(self, video_path: Path) -> None:
+        video_name = video_path.name
+        script = f'''
+        tell application "QuickTime Player"
+            repeat with d in documents
+                try
+                    if (name of d) is "{video_name}" then
+                        stop d
+                        close d saving no
+                    end if
+                end try
+            end repeat
+        end tell
+        '''
+        osascript(script)
 
 def draw_warning(frame, text="lock in twin"):
     h, w = frame.shape[:2]
@@ -92,7 +162,8 @@ def main():
     if not cam.isOpened():
         print("Could not open webcam")
         return
-    
+
+    player = VideoPlayer()
     doomscroll = None
     video_playing = False
 
@@ -155,18 +226,18 @@ def main():
 
                 if (current - doomscroll) >= timer:               
                     if not video_playing:
-                        play_video(skyrim_skeleton_video)
+                        player.play_video(skyrim_skeleton_video)
                         video_playing = True
 
             else:
                 doomscroll = None
                 if video_playing:
-                    close_video(skyrim_skeleton_video)
+                    player.close_video(skyrim_skeleton_video)
                     video_playing = False
         else:
             doomscroll = None
             if video_playing:
-                close_video(skyrim_skeleton_video)
+                player.close_video(skyrim_skeleton_video)
                 video_playing = False
 
         if video_playing:
@@ -179,7 +250,7 @@ def main():
             break
 
     if video_playing:
-        close_video(skyrim_skeleton_video)
+        player.close_video(skyrim_skeleton_video)
 
     cam.release()
     cv2.destroyAllWindows()
