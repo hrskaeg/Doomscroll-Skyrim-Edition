@@ -35,18 +35,25 @@ class VideoPlayer:
         else:
             self._close_video_windows()
 
-
-
     def _play_video_windows(self, video_path: Path) -> None:
-        # Play video with opencv on windows
         if self.process is not None:
             return
 
-        video_name = video_path.name
-
         def play_in_thread():
+            import vlc
+
+            # Audio with VLC
+            instance = vlc.Instance()
+            player = instance.media_player_new()
+            media = instance.media_new(str(video_path))
+            player.set_media(media)
+            player.audio_set_volume(100)
+            player.play()
+
+            # Video with OpenCV
             cap = cv2.VideoCapture(str(video_path))
             if not cap.isOpened():
+                player.stop()
                 return
 
             window_name = 'Video'
@@ -54,13 +61,15 @@ class VideoPlayer:
             cv2.resizeWindow(window_name, 390, 780)
             cv2.moveWindow(window_name, 25, 45)
 
-            fps =  30
+            fps = 30
             delay = int(1000 / fps)
 
             while cap.isOpened() and self.process is not None:
                 ret, frame = cap.read()
                 if not ret:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    player.stop()
+                    player.play()  # Restart audio
                     continue
 
                 cv2.imshow(window_name, frame)
@@ -69,7 +78,7 @@ class VideoPlayer:
 
             cap.release()
             cv2.destroyWindow(window_name)
-
+            player.stop()
 
         self.process = threading.Thread(target=play_in_thread, daemon=True)
         self.process.start()
